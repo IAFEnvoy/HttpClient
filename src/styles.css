@@ -180,20 +180,61 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+  min-width: 0;
 }
 
-.history-item .pin-btn {
+.history-actions {
+  display: flex;
+  gap: 0;
   margin-left: auto;
+  align-items: center;
   opacity: 0;
-  font-size: 14px;
+  transition: opacity 0.15s;
 }
 
-.history-item:hover .pin-btn {
+.history-item:hover .history-actions {
   opacity: 1;
+}
+
+.history-item .pin-btn,
+.history-item .del-history-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 1px 2px;
+  display: flex;
+  align-items: center;
+}
+
+.history-item .pin-btn img,
+.history-item .del-history-btn img {
+  width: 14px;
+  height: 14px;
+  opacity: 0.6;
+}
+
+.history-item .pin-btn:hover img,
+.history-item .del-history-btn:hover img {
+  opacity: 1;
+}
+
+.history-item .del-history-btn:hover img {
+  filter: brightness(0) saturate(100%) invert(24%) sepia(87%) saturate(2859%) hue-rotate(340deg) brightness(97%) contrast(98%);
+}
+
+.history-item .pin-btn:hover img {
+  filter: brightness(0) saturate(100%) invert(31%) sepia(92%) saturate(1284%) hue-rotate(220deg) brightness(95%) contrast(92%);
 }
 
 .history-item.pinned {
   border-color: var(--accent);
+}
+
+.btn-icon img {
+  width: 16px;
+  height: 16px;
+  display: block;
 }
 
 /* ── Method badge colors ────────────────────────────────────────── */
@@ -245,7 +286,7 @@ body {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 4px 8px;
+  padding: 4px 8px 0px 8px;
   background: var(--bg);
   border-bottom: 1px solid var(--border);
 }

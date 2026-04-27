@@ -2,7 +2,7 @@
 
 轻量级、可视化的 API 调试工具。
 
-*程序由DeepSeek V4 Pro编写，总Tokens：69,008,026*
+*程序由DeepSeek V4 Pro编写，总Tokens：71,593,772*
 
 ## 功能
 

@@ -587,18 +587,18 @@ function saveHistory() {
 }
 
 function addHistoryEntry(snapshot) {
-  // snapshot = { method, url, params, headers, bodyType, rawContentType, rawBody,
-  //              formdataFields, urlencodedFields, binaryPath,
-  //              authType, bearerToken, basicUsername, basicPassword,
-  //              apiKeyKey, apiKeyValue, apiKeyAddTo, currentEnv }
-  const entry = {
-    id: Date.now(),
-    ...snapshot,
-    pinned: false,
-    timestamp: new Date().toISOString(),
-  };
-  state.history.unshift(entry);
-  if (state.history.length > state.historyMax) state.history.pop();
+  // Dedupe: same method + URL → replace latest entry
+  const dupIdx = state.history.findIndex(h =>
+    h.method === snapshot.method && h.url === snapshot.url
+  );
+  if (dupIdx >= 0) {
+    const pinned = state.history[dupIdx].pinned;
+    state.history.splice(dupIdx, 1);
+    state.history.unshift({ id: Date.now(), ...snapshot, pinned, timestamp: new Date().toISOString() });
+  } else {
+    state.history.unshift({ id: Date.now(), ...snapshot, pinned: false, timestamp: new Date().toISOString() });
+    if (state.history.length > state.historyMax) state.history.pop();
+  }
   saveHistory();
   renderHistory();
 }
@@ -615,17 +615,21 @@ function renderHistory() {
   list.innerHTML = sorted.map(h => {
     const methodClass = h.method?.toLowerCase() || 'get';
     const shortUrl = (h.url || '').substring(0, 60) + (h.url && h.url.length > 60 ? '...' : '');
+    const pinIcon = h.pinned ? 'icon/pinned.svg' : 'icon/pin.svg';
     return `<div class="history-item${h.pinned ? ' pinned' : ''}" data-id="${h.id}">
       <span class="method-badge ${methodClass}">${escHtml(h.method || 'GET')}</span>
       <span class="url-text" title="${escHtml(h.url || '')}">${escHtml(shortUrl)}</span>
-      <button class="pin-btn" title="置顶/取消置顶">置顶</button>
+      <span class="history-actions">
+        <button class="pin-btn" title="置顶/取消置顶"><img src="${pinIcon}" /></button>
+        <button class="del-history-btn" title="删除"><img src="icon/delete.svg" /></button>
+      </span>
     </div>`;
   }).join('');
 
   // Click to restore
   list.querySelectorAll('.history-item').forEach(item => {
     item.addEventListener('click', (e) => {
-      if (e.target.classList.contains('pin-btn')) return; // handled separately
+      if (e.target.closest('.pin-btn') || e.target.closest('.del-history-btn')) return;
       const id = Number(item.dataset.id);
       restoreFromHistory(id);
     });
@@ -641,6 +645,16 @@ function renderHistory() {
         saveHistory();
         renderHistory();
       }
+    });
+  });
+  // Delete single history item
+  list.querySelectorAll('.del-history-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = Number(btn.closest('.history-item').dataset.id);
+      state.history = state.history.filter(h => h.id !== id);
+      saveHistory();
+      renderHistory();
     });
   });
 }
@@ -682,7 +696,7 @@ function restoreFromHistory(id) {
 }
 
 function clearHistory() {
-  state.history = [];
+  state.history = state.history.filter(h => h.pinned);
   saveHistory();
   renderHistory();
 }
@@ -1552,7 +1566,8 @@ window.addEventListener('DOMContentLoaded', () => {
   });
 
   function updateThemeBtn(theme) {
-    document.getElementById('btn-theme').textContent = theme === 'dark' ? '☀️' : '🌙';
+    const btn = document.getElementById('btn-theme');
+    btn.innerHTML = `<img src="icon/${theme === 'dark' ? 'light-mode' : 'dark-mode'}.svg" />`;
   }
 
   // ── Resizer: split request / response ────────────────────────────
