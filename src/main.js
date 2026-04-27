@@ -725,6 +725,36 @@ function takeHistorySnapshot() {
 }
 
 // ═════════════════════════════════════════════════════════════════
+//  URL QUERY EXTRACTOR
+// ═════════════════════════════════════════════════════════════════
+
+function extractQueryFromUrl() {
+  const t = getActiveTab();
+  const url = t.url.trim();
+  if (!url) return;
+  try {
+    const u = new URL(url);
+    const base = u.origin + u.pathname + u.hash;
+    const params = [];
+    u.searchParams.forEach((value, key) => {
+      params.push({ key, value, enabled: true });
+    });
+    if (params.length > 0) {
+      // Append to existing params, avoid duplicates
+      const existingKeys = new Set(t.params.map(p => p.key));
+      params.forEach(p => {
+        if (!existingKeys.has(p.key)) {
+          t.params.push(p);
+        }
+      });
+      t.url = base;
+      document.getElementById('url-input').value = base;
+      renderKVTable('params-table', t.params);
+    }
+  } catch (e) { /* invalid URL, ignore */ }
+}
+
+// ═════════════════════════════════════════════════════════════════
 //  VARIABLE RESOLVER
 // ═════════════════════════════════════════════════════════════════
 
@@ -1464,6 +1494,9 @@ window.addEventListener('DOMContentLoaded', () => {
   // URL input
   document.getElementById('url-input').addEventListener('input', (e) => {
     getActiveTab().url = e.target.value;
+  });
+  document.getElementById('url-input').addEventListener('blur', () => {
+    extractQueryFromUrl();
   });
 
   // Send button
