@@ -91,8 +91,3 @@ src-tauri/
     ├── main.rs     # 入口
     └── lib.rs      # Rust HTTP 命令 + 插件注册
 ```
-
-## License
-
-MIT
-
