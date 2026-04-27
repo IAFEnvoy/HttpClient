@@ -9,6 +9,8 @@
     "core:default",
     "opener:default",
     "dialog:default",
-    "fs:default"
+    "fs:default",
+    "http:default",
+    "http:allow-fetch"
   ]
 }

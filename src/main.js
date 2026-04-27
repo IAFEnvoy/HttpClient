@@ -16,6 +16,82 @@ async function tauriWriteFile(path, contents) {
   await invoke('plugin:fs|write_file', data, { headers: { path } });
 }
 
+// ── Tauri HTTP fetch (custom Rust command, zero scope limit) ─────
+async function tauriFetch(input, init = {}) {
+  const signal = init.signal;
+  if (signal?.aborted) throw new Error('Request cancelled');
+
+  // Build body as Uint8Array
+  let body = null;
+  if (init.body) {
+    if (typeof init.body === 'string') {
+      body = Array.from(new TextEncoder().encode(init.body));
+    } else if (init.body instanceof URLSearchParams) {
+      body = Array.from(new TextEncoder().encode(init.body.toString()));
+    } else if (init.body instanceof FormData) {
+      throw new Error('FormData not supported; use raw body instead');
+    } else if (init.body instanceof Blob) {
+      body = Array.from(new Uint8Array(await init.body.arrayBuffer()));
+    }
+  }
+
+  const url = typeof input === 'string' ? input : input.url || '';
+  const method = init.method || 'GET';
+
+  // Convert headers to [key, value][] format, de-dupe
+  const rawHeaders = init.headers || {};
+  let headerPairs = [];
+  if (rawHeaders instanceof Headers) {
+    rawHeaders.forEach((v, k) => headerPairs.push([k, v]));
+  } else if (Array.isArray(rawHeaders)) {
+    headerPairs = rawHeaders;
+  } else {
+    headerPairs = Object.entries(rawHeaders);
+  }
+  const seen = new Set();
+  const headers = headerPairs.filter(([k]) => {
+    const low = k.toLowerCase();
+    if (seen.has(low)) return false;
+    seen.add(low);
+    return true;
+  });
+
+  console.log('[fetch]', method, url);
+  console.log('[fetch] headers:', JSON.stringify(headers));
+
+  try {
+    const result = await invoke('fetch', {
+      request: {
+        method,
+        url,
+        headers,
+        body: body || undefined,
+      }
+    });
+    console.log('[fetch] result status:', result.status, 'size:', result.body?.length);
+
+    const { status, statusText, headers: respHeaders, body: bodyArr } = result;
+    const bodyU8 = new Uint8Array(bodyArr || []);
+    const responseHeaders = respHeaders || {};
+
+    return {
+      status,
+      statusText: statusText || '',
+      headers: {
+        forEach: (cb) => { for (const [k, v] of Object.entries(responseHeaders)) cb(v, k); },
+        get: (name) => responseHeaders[name.toLowerCase()] || null,
+      },
+      bodyU8,
+      async blob() { return new Blob([bodyU8]); },
+      async text() { return new TextDecoder().decode(bodyU8); },
+      async json() { return JSON.parse(new TextDecoder().decode(bodyU8)); },
+    };
+  } catch (e) {
+    console.error('[fetch] error:', e);
+    throw e;
+  }
+}
+
 // ── App State ────────────────────────────────────────────────────
 function newTabState(method, url) {
   return {
@@ -23,13 +99,20 @@ function newTabState(method, url) {
     url: url || '',
     name: '',
     params: [],
-    headers: [{ key: 'Content-Type', value: 'application/json', enabled: true }],
+    headers: [{ key: 'Content-Type', value: 'application/json', enabled: true, readonly: true }],
     bodyType: 'none',
     rawContentType: 'application/json',
     rawBody: '',
     formdataFields: [],
     urlencodedFields: [],
+    formdataMode: 'table',
+    formdataRaw: '',
+    urlencodedMode: 'table',
+    urlencodedRaw: '',
     binaryPath: '',
+    binaryMode: 'file',
+    binaryRaw: '',
+    jsonBody: '',
     authType: 'none',
     bearerToken: '',
     basicUsername: '',
@@ -78,11 +161,20 @@ function createKVRow(prefix, data, showFileBtn) {
 
   row.innerHTML = `
     <input type="checkbox" class="cb-enable" ${checked} title="启用/禁用" />
-    <input type="text" class="kv-key" placeholder="Key" value="${keyVal}" />
-    <input type="text" class="kv-value" placeholder="Value" value="${valueVal}" />
+    <input type="text" class="kv-key" placeholder="Key" value="${keyVal}" ${data.readonly ? 'readonly title="由 Body 类型自动管理，不可编辑"' : ''} />
+    <input type="text" class="kv-value" placeholder="Value" value="${valueVal}" ${data.readonly ? 'readonly title="由 Body 类型自动管理，不可编辑"' : ''} />
     ${showFileBtn ? '<button class="kv-file-btn" title="选择文件">选文件</button><span class="kv-file-type"></span>' : ''}
     <button class="btn-remove" title="删除">删除</button>
   `;
+
+  // Lock readonly rows instantly
+  if (data.readonly) {
+    const cb = row.querySelector('.cb-enable');
+    if (cb) { cb.disabled = true; cb.style.opacity = '0.6'; cb.title = '由 Body 类型自动管理'; }
+    const rm = row.querySelector('.btn-remove');
+    if (rm) rm.style.display = 'none';
+    row.querySelectorAll('input[type="text"]').forEach(inp => { inp.style.opacity = '0.6'; });
+  }
 
   // Enable toggle
   const cb = row.querySelector('.cb-enable');
@@ -184,6 +276,23 @@ function renderKVTable(containerId, items, showFileBtn) {
   (items || []).forEach(item => {
     container.appendChild(createKVRow(containerId, item, showFileBtn));
   });
+  // After render, lock Content-Type row if readonly
+  if (containerId === 'headers-table') {
+    const ctHeader = (items || []).find(h => h.key && h.key.toLowerCase() === 'content-type');
+    if (ctHeader && ctHeader.enabled && ctHeader.readonly) {
+      const rows = container.querySelectorAll('.kv-row');
+      rows.forEach(row => {
+        const keyInput = row.querySelector('.kv-key');
+        if (!keyInput || keyInput.value !== 'Content-Type') return;
+        const inputs = row.querySelectorAll('input[type="text"]');
+        inputs.forEach(inp => { inp.readOnly = true; inp.style.opacity = '0.6'; });
+        const cb = row.querySelector('.cb-enable');
+        if (cb) { cb.disabled = true; cb.style.opacity = '0.6'; }
+        const rm = row.querySelector('.btn-remove');
+        if (rm) rm.style.display = 'none';
+      });
+    }
+  }
 }
 
 /** Add a blank row */
@@ -221,56 +330,148 @@ function initTabs() {
 
 // ── Body panel ──────────────────────────────────────────────────
 function initBodyPanel() {
+  const T = () => getActiveTab();
+
   const typeRadios = document.querySelectorAll('input[name="body-type"]');
-  const t = getActiveTab();
   typeRadios.forEach(r => {
     r.addEventListener('change', () => {
-      t.bodyType = r.value;
+      T().bodyType = r.value;
       updateBodySubPanel();
+      syncContentTypeHeader(T());
     });
   });
-  // Raw content-type + body textarea + live preview
+
+  // Raw content-type
   const rawCT = document.getElementById('raw-content-type');
   const rawBody = document.getElementById('raw-body');
   const rawPreview = document.getElementById('raw-preview');
-  if (rawBody) rawBody.addEventListener('input', () => {
-    t.rawBody = rawBody.value;
-    updateRawPreview();
-  });
-  if (rawCT) rawCT.addEventListener('change', () => {
-    t.rawContentType = rawCT.value;
-    updateRawPreview();
-  });
+  if (rawBody) rawBody.addEventListener('input', () => { T().rawBody = rawBody.value; updateRawPreview(); });
+  if (rawCT) rawCT.addEventListener('input', () => { T().rawContentType = rawCT.value; updateRawPreview(); syncContentTypeHeader(T()); });
 
   function updateRawPreview() {
-    if (!rawPreview || !t.rawBody.trim()) {
-      if (rawPreview) rawPreview.classList.add('hidden');
-      return;
-    }
+    const rw = T().rawBody, ct = T().rawContentType;
+    if (!rawPreview || !rw.trim()) { if (rawPreview) rawPreview.classList.add('hidden'); return; }
     rawPreview.classList.remove('hidden');
     let lang = 'text';
-    if (t.rawContentType.includes('json')) lang = 'json';
-    else if (t.rawContentType.includes('xml') || t.rawContentType.includes('html')) lang = 'xml';
-    rawPreview.innerHTML = '<code>' + renderHighlighted(t.rawBody, lang) + '</code>';
+    if (ct.includes('json')) lang = 'json';
+    else if (ct.includes('xml') || ct.includes('html')) lang = 'xml';
+    rawPreview.innerHTML = '<code>' + renderHighlighted(rw, lang) + '</code>';
   }
-  // Binary file picker
+
+  // JSON body
+  const jsonBody = document.getElementById('json-body');
+  const jsonPreview = document.getElementById('json-preview');
+  if (jsonBody) jsonBody.addEventListener('input', () => {
+    T().jsonBody = jsonBody.value;
+    if (jsonPreview) {
+      if (!T().jsonBody.trim()) { jsonPreview.classList.add('hidden'); return; }
+      jsonPreview.classList.remove('hidden');
+      jsonPreview.innerHTML = '<code>' + renderHighlighted(T().jsonBody, 'json') + '</code>';
+    }
+  });
+
+  // Form-data mode switch
+  const formdataMode = document.getElementById('formdata-mode');
+  const formdataTableWrap = document.getElementById('formdata-table-wrap');
+  const formdataRaw = document.getElementById('formdata-raw');
+  if (formdataMode) formdataMode.addEventListener('change', () => {
+    T().formdataMode = formdataMode.value;
+    updateFormSubPanel();
+  });
+  if (formdataRaw) formdataRaw.addEventListener('input', () => { T().formdataRaw = formdataRaw.value; });
+
+  // Urlencoded mode switch
+  const urlencodedMode = document.getElementById('urlencoded-mode');
+  const urlencodedTableWrap = document.getElementById('urlencoded-table-wrap');
+  const urlencodedRaw = document.getElementById('urlencoded-raw');
+  if (urlencodedMode) urlencodedMode.addEventListener('change', () => {
+    T().urlencodedMode = urlencodedMode.value;
+    updateFormSubPanel();
+  });
+  if (urlencodedRaw) urlencodedRaw.addEventListener('input', () => { T().urlencodedRaw = urlencodedRaw.value; });
+
+  function updateFormSubPanel() {
+    const fm = T().formdataMode, um = T().urlencodedMode;
+    if (formdataTableWrap) formdataTableWrap.classList.toggle('hidden', fm !== 'table');
+    if (formdataRaw) formdataRaw.classList.toggle('hidden', fm !== 'raw');
+    if (urlencodedTableWrap) urlencodedTableWrap.classList.toggle('hidden', um !== 'table');
+    if (urlencodedRaw) urlencodedRaw.classList.toggle('hidden', um !== 'raw');
+  }
+
+  // Binary mode + file picker
+  const binaryModeRadios = document.querySelectorAll('input[name="binary-mode"]');
+  const binaryFileWrap = document.getElementById('binary-file-wrap');
+  const binaryRaw = document.getElementById('binary-raw');
+  binaryModeRadios.forEach(r => r.addEventListener('change', () => {
+    T().binaryMode = r.value;
+    if (binaryFileWrap) binaryFileWrap.classList.toggle('hidden', T().binaryMode !== 'file');
+    if (binaryRaw) binaryRaw.classList.toggle('hidden', T().binaryMode !== 'raw');
+  }));
+  if (binaryRaw) binaryRaw.addEventListener('input', () => { T().binaryRaw = binaryRaw.value; });
+
   const btnPickBinary = document.getElementById('btn-pick-binary');
   if (btnPickBinary) btnPickBinary.addEventListener('click', async () => {
     try {
       const f = await tauriOpen({ multiple: false });
-      if (f) {
-        document.getElementById('binary-path').value = f;
-        t.binaryPath = f;
-      }
+      if (f) { document.getElementById('binary-path').value = f; T().binaryPath = f; }
     } catch (e) { /* cancelled */ }
   });
 }
 
 function updateBodySubPanel() {
-  document.querySelectorAll('.body-sub-panel').forEach(p => p.classList.remove('active'));
   const t1 = getActiveTab();
-  const panel = document.querySelector(`.body-sub-panel[data-body="${t1.bodyType}"]`);
+  console.log(t1)
+  const type = t1.bodyType || 'none';
+  document.querySelectorAll('.body-sub-panel').forEach(p => p.classList.remove('active'));
+  const panel = document.querySelector(`.body-sub-panel[data-body="${type}"]`);
   if (panel) panel.classList.add('active');
+  else {
+    const fallback = document.querySelector('.body-sub-panel[data-body="none"]');
+    if (fallback) fallback.classList.add('active');
+  }
+  // Sync form/binary sub-modes
+  const fdTable = document.getElementById('formdata-table-wrap');
+  const fdRaw = document.getElementById('formdata-raw');
+  if (fdTable) fdTable.classList.toggle('hidden', t1.formdataMode !== 'table');
+  if (fdRaw) fdRaw.classList.toggle('hidden', t1.formdataMode !== 'raw');
+  const ueTable = document.getElementById('urlencoded-table-wrap');
+  const ueRaw = document.getElementById('urlencoded-raw');
+  if (ueTable) ueTable.classList.toggle('hidden', t1.urlencodedMode !== 'table');
+  if (ueRaw) ueRaw.classList.toggle('hidden', t1.urlencodedMode !== 'raw');
+  const bfWrap = document.getElementById('binary-file-wrap');
+  const bRaw = document.getElementById('binary-raw');
+  if (bfWrap) bfWrap.classList.toggle('hidden', t1.binaryMode !== 'file');
+  if (bRaw) bRaw.classList.toggle('hidden', t1.binaryMode !== 'raw');
+}
+
+/** Sync Content-Type header — only none disables; all others auto-set & readonly */
+function syncContentTypeHeader(tab) {
+  syncFromTables();
+  const headers = tab.headers;
+  const ctHeader = headers.find(h => h.key && h.key.toLowerCase() === 'content-type');
+
+  if (tab.bodyType === 'none') {
+    if (ctHeader) {
+      ctHeader.enabled = false;
+      ctHeader.readonly = true;
+    }
+  } else {
+    let ct = '';
+    if (tab.bodyType === 'json') ct = 'application/json';
+    else if (tab.bodyType === 'raw') ct = tab.rawContentType;
+    else if (tab.bodyType === 'x-www-form-urlencoded') ct = 'application/x-www-form-urlencoded';
+    else if (tab.bodyType === 'form-data') ct = 'multipart/form-data';
+    else if (tab.bodyType === 'binary') ct = 'application/octet-stream';
+
+    if (ctHeader) {
+      ctHeader.value = ct;
+      ctHeader.enabled = true;
+      ctHeader.readonly = true; // mark for render
+    } else {
+      headers.unshift({ key: 'Content-Type', value: ct, enabled: true, readonly: true });
+    }
+  }
+  renderKVTable('headers-table', headers, false, 'headers-table');
 }
 
 // ── Auth panel ──────────────────────────────────────────────────
@@ -459,6 +660,13 @@ function restoreFromHistory(id) {
   t.formdataFields = entry.formdataFields || [];
   t.urlencodedFields = entry.urlencodedFields || [];
   t.binaryPath = entry.binaryPath || '';
+  t.formdataMode = entry.formdataMode || 'table';
+  t.formdataRaw = entry.formdataRaw || '';
+  t.urlencodedMode = entry.urlencodedMode || 'table';
+  t.urlencodedRaw = entry.urlencodedRaw || '';
+  t.binaryMode = entry.binaryMode || 'file';
+  t.binaryRaw = entry.binaryRaw || '';
+  t.jsonBody = entry.jsonBody || '';
   t.authType = entry.authType || 'none';
   t.bearerToken = entry.bearerToken || '';
   t.basicUsername = entry.basicUsername || '';
@@ -484,25 +692,21 @@ function takeHistorySnapshot() {
   syncFromTables();
   const t = getActiveTab();
   return {
-    method: t.method,
-    url: t.url,
+    method: t.method, url: t.url,
     params: JSON.parse(JSON.stringify(t.params)),
     headers: JSON.parse(JSON.stringify(t.headers)),
     bodyType: t.bodyType,
-    rawContentType: t.rawContentType,
-    rawBody: t.rawBody,
+    rawContentType: t.rawContentType, rawBody: t.rawBody,
     formdataFields: JSON.parse(JSON.stringify(t.formdataFields)),
     urlencodedFields: JSON.parse(JSON.stringify(t.urlencodedFields)),
-    binaryPath: t.binaryPath,
-    authType: t.authType,
-    bearerToken: t.bearerToken,
-    basicUsername: t.basicUsername,
-    basicPassword: t.basicPassword,
-    apiKeyKey: t.apiKeyKey,
-    apiKeyValue: t.apiKeyValue,
-    apiKeyAddTo: t.apiKeyAddTo,
-    currentEnv: state.currentEnv,
-    script: t.script,
+    formdataMode: t.formdataMode, formdataRaw: t.formdataRaw,
+    urlencodedMode: t.urlencodedMode, urlencodedRaw: t.urlencodedRaw,
+    binaryPath: t.binaryPath, binaryMode: t.binaryMode, binaryRaw: t.binaryRaw,
+    jsonBody: t.jsonBody,
+    authType: t.authType, bearerToken: t.bearerToken,
+    basicUsername: t.basicUsername, basicPassword: t.basicPassword,
+    apiKeyKey: t.apiKeyKey, apiKeyValue: t.apiKeyValue, apiKeyAddTo: t.apiKeyAddTo,
+    currentEnv: state.currentEnv, script: t.script,
   };
 }
 
@@ -721,57 +925,63 @@ async function sendRequest() {
   // Body
   if (t.method.toUpperCase() !== 'GET' && t.method.toUpperCase() !== 'HEAD') {
     if (t.bodyType === 'raw' && t.rawBody) {
-      if (!headers['Content-Type'] && !headers['content-type']) {
-        headers['Content-Type'] = t.rawContentType;
-        opts.headers = headers;
-      }
       opts.body = resolveVariables(t.rawBody);
-    } else if (t.bodyType === 'x-www-form-urlencoded' && t.urlencodedFields.length) {
-      const form = new URLSearchParams();
-      t.urlencodedFields.filter(f => f.enabled && f.key).forEach(f => {
-        form.append(f.key, resolveVariables(f.value));
-      });
-      opts.body = form;
-    } else if (t.bodyType === 'form-data' && t.formdataFields.length) {
-      const fd = new FormData();
-      for (const f of t.formdataFields) {
-        if (!f.enabled || !f.key) continue;
-        if (f.fieldType === 'file') {
-          try {
-            const bytes = await tauriReadFile(f.filePath);
-            const blob = new Blob([bytes]);
-            const fileName = f.filePath.split(/[/\\]/).pop();
-            fd.append(f.key, blob, fileName);
-          } catch (e) {
-            respContent.textContent = `❌ 读取文件失败: ${e}`;
-            respContent.className = 'code-view';
-            return;
-          }
-        } else {
-          fd.append(f.key, resolveVariables(f.text || ''));
-        }
+    } else if (t.bodyType === 'json' && t.jsonBody) {
+      opts.body = resolveVariables(t.jsonBody);
+    } else if (t.bodyType === 'x-www-form-urlencoded') {
+      if (t.urlencodedMode === 'raw' && t.urlencodedRaw) {
+        opts.body = resolveVariables(t.urlencodedRaw);
+      } else if (t.urlencodedFields.length) {
+        const form = new URLSearchParams();
+        t.urlencodedFields.filter(f => f.enabled && f.key).forEach(f => {
+          form.append(f.key, resolveVariables(f.value));
+        });
+        opts.body = form;
       }
-      opts.body = fd;
-      delete headers['Content-Type']; // let browser set boundary
-      delete headers['content-type'];
-    } else if (t.bodyType === 'binary' && t.binaryPath) {
-      try {
-        const bytes = await tauriReadFile(t.binaryPath);
-        opts.body = new Blob([bytes]);
-        if (!headers['Content-Type'] && !headers['content-type']) {
-          headers['Content-Type'] = 'application/octet-stream';
-          opts.headers = headers;
+    } else if (t.bodyType === 'form-data') {
+      if (t.formdataMode === 'raw' && t.formdataRaw) {
+        opts.body = resolveVariables(t.formdataRaw);
+      } else if (t.formdataFields.length) {
+        const fd = new FormData();
+        for (const f of t.formdataFields) {
+          if (!f.enabled || !f.key) continue;
+          if (f.fieldType === 'file') {
+            try {
+              const bytes = await tauriReadFile(f.filePath);
+              const blob = new Blob([bytes]);
+              const fileName = f.filePath.split(/[/\\]/).pop();
+              fd.append(f.key, blob, fileName);
+            } catch (e) {
+              respContent.textContent = `❌ 读取文件失败: ${e}`;
+              respContent.className = 'code-view';
+              return;
+            }
+          } else {
+            fd.append(f.key, resolveVariables(f.text || ''));
+          }
         }
-      } catch (e) {
-        respContent.textContent = `❌ 读取文件失败: ${e}`;
-        respContent.className = 'code-view';
-        return;
+        opts.body = fd;
+        delete headers['Content-Type'];
+        delete headers['content-type'];
+      }
+    } else if (t.bodyType === 'binary') {
+      if (t.binaryMode === 'raw' && t.binaryRaw) {
+        opts.body = resolveVariables(t.binaryRaw);
+      } else if (t.binaryPath) {
+        try {
+          const bytes = await tauriReadFile(t.binaryPath);
+          opts.body = new Blob([bytes]);
+        } catch (e) {
+          respContent.textContent = `❌ 读取文件失败: ${e}`;
+          respContent.className = 'code-view';
+          return;
+        }
       }
     }
   }
 
   try {
-    const resp = await fetch(url, opts);
+    const resp = await tauriFetch(url, opts);
     const elapsed = Math.round(performance.now() - startTime);
 
     // Read headers
@@ -994,9 +1204,20 @@ function populateUI() {
   document.getElementById('raw-content-type').value = t.rawContentType;
   document.getElementById('raw-body').value = t.rawBody;
   document.getElementById('binary-path').value = t.binaryPath;
+  document.getElementById('json-body').value = t.jsonBody || '';
+  document.getElementById('formdata-raw').value = t.formdataRaw || '';
+  document.getElementById('urlencoded-raw').value = t.urlencodedRaw || '';
+  document.getElementById('binary-raw').value = t.binaryRaw || '';
+  const formdataMode = document.getElementById('formdata-mode');
+  if (formdataMode) formdataMode.value = t.formdataMode || 'table';
+  const urlencodedMode = document.getElementById('urlencoded-mode');
+  if (urlencodedMode) urlencodedMode.value = t.urlencodedMode || 'table';
+  const binaryModeRadio = document.querySelector(`input[name="binary-mode"][value="${t.binaryMode || 'file'}"]`);
+  if (binaryModeRadio) binaryModeRadio.checked = true;
   renderKVTable('formdata-table', t.formdataFields, true);
   renderKVTable('urlencoded-table', t.urlencodedFields);
   updateBodySubPanel();
+  syncContentTypeHeader(t);
 
   // Auth
   const authRadio = document.querySelector(`input[name="auth-type"][value="${t.authType}"]`);
@@ -1157,7 +1378,11 @@ function saveTabs() {
     params: t.params, headers: t.headers,
     bodyType: t.bodyType, rawContentType: t.rawContentType,
     rawBody: t.rawBody, formdataFields: t.formdataFields,
-    urlencodedFields: t.urlencodedFields, binaryPath: t.binaryPath,
+    urlencodedFields: t.urlencodedFields,
+    formdataMode: t.formdataMode, formdataRaw: t.formdataRaw,
+    urlencodedMode: t.urlencodedMode, urlencodedRaw: t.urlencodedRaw,
+    binaryPath: t.binaryPath, binaryMode: t.binaryMode, binaryRaw: t.binaryRaw,
+    jsonBody: t.jsonBody,
     authType: t.authType, bearerToken: t.bearerToken,
     basicUsername: t.basicUsername, basicPassword: t.basicPassword,
     apiKeyKey: t.apiKeyKey, apiKeyValue: t.apiKeyValue, apiKeyAddTo: t.apiKeyAddTo,
@@ -1254,16 +1479,25 @@ window.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Quick headers
-  document.querySelectorAll('[data-insert-header]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const [key, value] = btn.dataset.insertHeader.split(':');
-      document.getElementById('headers-table').appendChild(
-        createKVRow('headers-table', { key, value, enabled: true }, false)
-      );
-      syncFromTables();
-    });
-  });
+  // Quick headers — loaded from src/headers.json
+  fetch('headers.json')
+    .then(r => r.json())
+    .then(list => {
+      const container = document.getElementById('quick-headers');
+      if (!container) return;
+      list.forEach(item => {
+        const btn = document.createElement('button');
+        btn.textContent = item.label;
+        btn.addEventListener('click', () => {
+          document.getElementById('headers-table').appendChild(
+            createKVRow('headers-table', { key: item.key, value: item.value, enabled: true }, false)
+          );
+          syncFromTables();
+        });
+        container.appendChild(btn);
+      });
+    })
+    .catch(() => { });
 
   // Params bulk import
   document.getElementById('params-bulk').addEventListener('change', (e) => {

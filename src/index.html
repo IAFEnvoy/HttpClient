@@ -74,13 +74,8 @@
           <div class="tab-panel" id="panel-headers">
             <div class="kv-table" id="headers-table"></div>
             <button class="btn-add-row" data-target="headers">+ 添加 Header</button>
-            <div class="quick-headers">
+            <div class="quick-headers" id="quick-headers">
               <span>快捷:</span>
-              <button data-insert-header="Content-Type:application/json">JSON</button>
-              <button data-insert-header="Content-Type:application/xml">XML</button>
-              <button data-insert-header="Content-Type:text/html">HTML</button>
-              <button data-insert-header="Accept:application/json">Accept JSON</button>
-              <button data-insert-header="Authorization:Bearer ">Bearer</button>
             </div>
           </div>
 
@@ -90,39 +85,76 @@
               <label><input type="radio" name="body-type" value="none" checked /> none</label>
               <label><input type="radio" name="body-type" value="form-data" /> form-data</label>
               <label><input type="radio" name="body-type" value="x-www-form-urlencoded" /> x-www-form-urlencoded</label>
-              <label><input type="radio" name="body-type" value="raw" /> raw</label>
+              <label><input type="radio" name="body-type" value="json" /> json</label>
               <label><input type="radio" name="body-type" value="binary" /> binary</label>
+              <label><input type="radio" name="body-type" value="raw" /> raw</label>
             </div>
             <!-- none -->
             <div class="body-sub-panel active" data-body="none">
               <p class="hint">此请求没有 Body。</p>
             </div>
-            <!-- form-data / x-www-form-urlencoded -->
+            <!-- form-data -->
             <div class="body-sub-panel" data-body="form-data">
-              <div class="kv-table" id="formdata-table"></div>
-              <button class="btn-add-row" data-target="formdata">+ 添加字段</button>
+              <div class="form-toolbar">
+                <select id="formdata-mode" class="form-mode-select">
+                  <option value="table">KV 表格</option>
+                  <option value="raw">原始文本</option>
+                </select>
+              </div>
+              <div id="formdata-table-wrap">
+                <div class="kv-table" id="formdata-table"></div>
+                <button class="btn-add-row" data-target="formdata">+ 添加字段</button>
+              </div>
+              <textarea id="formdata-raw" class="form-raw-textarea hidden" placeholder="直接输入 multipart/form-data 原始内容"
+                rows="6" spellcheck="false"></textarea>
             </div>
+            <!-- x-www-form-urlencoded -->
             <div class="body-sub-panel" data-body="x-www-form-urlencoded">
-              <div class="kv-table" id="urlencoded-table"></div>
-              <button class="btn-add-row" data-target="urlencoded">+ 添加字段</button>
+              <div class="form-toolbar">
+                <select id="urlencoded-mode" class="form-mode-select">
+                  <option value="table">KV 表格</option>
+                  <option value="raw">原始文本</option>
+                </select>
+              </div>
+              <div id="urlencoded-table-wrap">
+                <div class="kv-table" id="urlencoded-table"></div>
+                <button class="btn-add-row" data-target="urlencoded">+ 添加字段</button>
+              </div>
+              <textarea id="urlencoded-raw" class="form-raw-textarea hidden" placeholder="key1=val1&key2=val2" rows="4"
+                spellcheck="false"></textarea>
             </div>
-            <!-- raw -->
-            <div class="body-sub-panel" data-body="raw">
-              <select id="raw-content-type">
-                <option>application/json</option>
-                <option>application/xml</option>
-                <option>text/plain</option>
-                <option>text/html</option>
-              </select>
-              <textarea id="raw-body" placeholder='{"key": "value"}' rows="10" spellcheck="false"></textarea>
-              <pre id="raw-preview" class="raw-preview hidden"></pre>
+            <!-- json -->
+            <div class="body-sub-panel" data-body="json">
+              <textarea id="json-body" placeholder='{"key": "value"}' rows="10" spellcheck="false"></textarea>
+              <pre id="json-preview" class="raw-preview hidden"></pre>
             </div>
             <!-- binary -->
             <div class="body-sub-panel" data-body="binary">
-              <div class="file-picker">
+              <div class="form-toolbar">
+                <label><input type="radio" name="binary-mode" value="file" checked /> 上传文件</label>
+                <label><input type="radio" name="binary-mode" value="raw" /> 原始数据</label>
+              </div>
+              <div id="binary-file-wrap" class="file-picker">
                 <input type="text" id="binary-path" readonly placeholder="选择文件..." />
                 <button id="btn-pick-binary">浏览</button>
               </div>
+              <textarea id="binary-raw" class="form-raw-textarea hidden" placeholder="直接输入二进制原始内容" rows="6"
+                spellcheck="false"></textarea>
+            </div>
+            <!-- raw -->
+            <div class="body-sub-panel" data-body="raw">
+              <input id="raw-content-type" list="raw-ct-list" value="application/json" />
+              <datalist id="raw-ct-list">
+                <option value="application/json">
+                <option value="application/xml">
+                <option value="text/plain">
+                <option value="text/html">
+                <option value="application/octet-stream">
+                <option value="multipart/form-data">
+                <option value="application/x-www-form-urlencoded">
+              </datalist>
+              <textarea id="raw-body" placeholder='{"key": "value"}' rows="10" spellcheck="false"></textarea>
+              <pre id="raw-preview" class="raw-preview hidden"></pre>
             </div>
           </div>
 
