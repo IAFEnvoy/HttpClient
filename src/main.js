@@ -693,6 +693,13 @@ function restoreFromHistory(id) {
   }
   populateUI();
   document.querySelector('.tab[data-tab="params"]')?.click();
+  // Auto-close sidebar on narrow screen after restoring from history
+  if (window.innerWidth < 750) {
+    const sidebar = document.getElementById('sidebar');
+    const sidebarOverlay = document.getElementById('sidebar-overlay');
+    if (sidebar) sidebar.classList.remove('open');
+    if (sidebarOverlay) sidebarOverlay.classList.add('hidden');
+  }
 }
 
 function clearHistory() {
@@ -1561,10 +1568,30 @@ window.addEventListener('DOMContentLoaded', () => {
     e.target.value = '';
   });
 
+  // ── cURL More Dropdown ──────────────────────────────────────────
+  const curlMenuBtn = document.getElementById('btn-curl-menu');
+  const curlDropdown = document.getElementById('curl-dropdown');
+  if (curlMenuBtn && curlDropdown) {
+    curlMenuBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      curlDropdown.classList.toggle('hidden');
+    });
+    document.addEventListener('click', () => {
+      curlDropdown.classList.add('hidden');
+    });
+  }
   // cURL export
-  document.getElementById('btn-curl-export').addEventListener('click', exportCurl);
+  document.getElementById('btn-curl-export').addEventListener('click', (e) => {
+    e.stopPropagation();
+    exportCurl();
+    curlDropdown.classList.add('hidden');
+  });
   // cURL import
-  document.getElementById('btn-curl-import').addEventListener('click', importCurl);
+  document.getElementById('btn-curl-import').addEventListener('click', (e) => {
+    e.stopPropagation();
+    importCurl();
+    curlDropdown.classList.add('hidden');
+  });
   document.getElementById('btn-curl-parse').addEventListener('click', parseAndImportCurl);
   document.getElementById('btn-modal-close').addEventListener('click', () => {
     document.getElementById('modal-overlay').classList.add('hidden');
@@ -1574,14 +1601,142 @@ window.addEventListener('DOMContentLoaded', () => {
     if (e.target === e.currentTarget) document.getElementById('modal-overlay').classList.add('hidden');
   });
 
+  // ── DNS / WHOIS Lookup ─────────────────────────────────────────
+  const lookupOverlay = document.getElementById('lookup-overlay');
+  const lookupTitle = document.getElementById('lookup-title');
+  const lookupDomain = document.getElementById('lookup-domain');
+  const lookupResult = document.getElementById('lookup-result');
+  const lookupLoading = document.getElementById('lookup-loading');
+
+  let lookupMode = 'dns'; // 'dns' or 'whois'
+
+  function openLookup(mode) {
+    lookupMode = mode;
+    lookupTitle.textContent = mode === 'dns' ? 'DNS 查询' : 'WHOIS 查询';
+    lookupDomain.value = '';
+    lookupResult.textContent = '';
+    lookupLoading.classList.add('hidden');
+    lookupOverlay.classList.remove('hidden');
+    lookupDomain.focus();
+  }
+
+  function closeLookup() {
+    lookupOverlay.classList.add('hidden');
+  }
+
+  async function doLookup() {
+    const domain = lookupDomain.value.trim();
+    if (!domain) return;
+    lookupResult.textContent = '';
+    lookupLoading.classList.remove('hidden');
+
+    try {
+      if (lookupMode === 'dns') {
+        const result = await invoke('dns_lookup', { domain });
+        if (result.error) {
+          lookupResult.textContent = `⚠ ${result.error}`;
+        } else if (!result.records.length) {
+          lookupResult.textContent = '未找到任何 DNS 记录。';
+        } else {
+          // Group by type
+          const grouped = {};
+          result.records.forEach(r => {
+            if (!grouped[r.type]) grouped[r.type] = [];
+            grouped[r.type].push(r);
+          });
+          let out = `;; ${result.domain} 的 DNS 查询结果\n\n`;
+          for (const [type, recs] of Object.entries(grouped)) {
+            out += `;; ${type} 记录:\n`;
+            recs.forEach(r => {
+              out += `${r.name}  ${r.ttl}  IN  ${r.type}  ${r.value}\n`;
+            });
+            out += '\n';
+          }
+          lookupResult.textContent = out.trimEnd();
+        }
+      } else {
+        const result = await invoke('whois_lookup', { domain });
+        if (result.error) {
+          lookupResult.textContent = `⚠ ${result.error}`;
+        } else if (!result.raw_text.trim() && !result.summary.trim()) {
+          lookupResult.textContent = '未获取到 WHOIS 信息。';
+        } else {
+          lookupResult.textContent = (result.summary || '') + '\n' + (result.raw_text || '');
+        }
+      }
+    } catch (e) {
+      lookupResult.textContent = `❌ 查询失败: ${e}`;
+    } finally {
+      lookupLoading.classList.add('hidden');
+    }
+  }
+
+  // DNS lookup button in dropdown
+  document.getElementById('btn-dns-lookup').addEventListener('click', (e) => {
+    e.stopPropagation();
+    curlDropdown.classList.add('hidden');
+    openLookup('dns');
+  });
+
+  // WHOIS lookup button in dropdown
+  document.getElementById('btn-whois-lookup').addEventListener('click', (e) => {
+    e.stopPropagation();
+    curlDropdown.classList.add('hidden');
+    openLookup('whois');
+  });
+
+  document.getElementById('btn-lookup-go').addEventListener('click', doLookup);
+  document.getElementById('btn-lookup-close').addEventListener('click', closeLookup);
+  lookupOverlay.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeLookup();
+  });
+  lookupDomain.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') doLookup();
+  });
+
   // Save / Copy response
-  document.getElementById('btn-save-response').addEventListener('click', saveResponse);
-  document.getElementById('btn-copy-response').addEventListener('click', copyResponse);
 
   // Clear history
   document.getElementById('btn-clear-history').addEventListener('click', () => {
     if (confirm('确认清空所有历史记录？')) clearHistory();
   });
+
+  // ── History sidebar toggle (narrow screen) ─────────────────────
+  const btnToggleHistory = document.getElementById('btn-toggle-history');
+  const sidebar = document.getElementById('sidebar');
+  const sidebarOverlay = document.getElementById('sidebar-overlay');
+
+  function openSidebar() {
+    sidebar.classList.add('open');
+    if (sidebarOverlay) sidebarOverlay.classList.remove('hidden');
+  }
+  function closeSidebar() {
+    sidebar.classList.remove('open');
+    if (sidebarOverlay) sidebarOverlay.classList.add('hidden');
+  }
+
+  if (btnToggleHistory && sidebar) {
+    btnToggleHistory.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (sidebar.classList.contains('open')) {
+        closeSidebar();
+      } else {
+        openSidebar();
+      }
+    });
+    // Overlay click → close
+    if (sidebarOverlay) sidebarOverlay.addEventListener('click', closeSidebar);
+    // Close sidebar when clicking on main area (narrow mode, but not on the button)
+    document.getElementById('main').addEventListener('click', (e) => {
+      if (window.innerWidth < 750 && !e.target.closest('#btn-toggle-history')) {
+        closeSidebar();
+      }
+    });
+    // Close sidebar when window resizes beyond narrow threshold
+    window.addEventListener('resize', () => {
+      if (window.innerWidth >= 750) closeSidebar();
+    });
+  }
 
   // ── Theme toggle ──────────────────────────────────────────────────
   const LS_THEME = 'httpclient_theme';

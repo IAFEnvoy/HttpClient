@@ -12,6 +12,8 @@
 <body>
   <!-- ── App Shell ────────────────────────────────────────────── -->
   <div id="app">
+    <!-- Sidebar overlay (narrow screen) -->
+    <div id="sidebar-overlay" class="sidebar-overlay hidden"></div>
     <!-- Sidebar: History -->
     <aside id="sidebar">
       <div class="sidebar-header">
@@ -28,6 +30,8 @@
       <section id="request-section">
         <!-- Row 0: Request Tab Bar -->
         <div id="tab-bar">
+          <button id="btn-toggle-history" class="btn-icon history-toggle-btn" title="历史记录"><img
+              src="icon/history.svg" /></button>
           <div id="tab-list"></div>
           <button id="btn-new-tab" class="btn-tool" title="新建标签">+</button>
         </div>
@@ -45,8 +49,16 @@
           </select>
           <input id="url-input" type="text" placeholder="https://api.example.com/endpoint" spellcheck="false" />
           <button id="btn-send" class="btn-send">Send</button>
-          <button id="btn-curl-export" class="btn-tool" title="导出 cURL">cURL导出</button>
-          <button id="btn-curl-import" class="btn-tool" title="从 cURL 导入">cURL导入</button>
+          <div class="curl-menu-wrap">
+            <button id="btn-curl-menu" class="btn-tool btn-icon-only" title="更多"><img src="icon/more.svg" /></button>
+            <div class="curl-dropdown hidden" id="curl-dropdown">
+              <button id="btn-curl-export" class="curl-dropdown-item">cURL 导出</button>
+              <button id="btn-curl-import" class="curl-dropdown-item">cURL 导入</button>
+              <div class="curl-dropdown-divider"></div>
+              <button id="btn-dns-lookup" class="curl-dropdown-item">DNS 查询</button>
+              <button id="btn-whois-lookup" class="curl-dropdown-item">WHOIS 查询</button>
+            </div>
+          </div>
         </div>
 
         <!-- Row 2: Tabs -->
@@ -246,7 +258,7 @@
     </main>
   </div>
 
-  <!-- ── Modal overlay (curl import) ────────────────────────────── -->
+  <!-- ── Modal overlay (cURL import) ────────────────────────────── -->
   <div id="modal-overlay" class="modal-overlay hidden">
     <div class="modal">
       <h3>从 cURL 导入</h3>
@@ -254,6 +266,22 @@
       <div class="modal-actions">
         <button id="btn-curl-parse">导入</button>
         <button id="btn-modal-close">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Modal overlay (DNS / WHOIS lookup) ─────────────────────── -->
+  <div id="lookup-overlay" class="modal-overlay hidden">
+    <div class="modal lookup-modal">
+      <h3 id="lookup-title">DNS 查询</h3>
+      <div class="lookup-input-row">
+        <input id="lookup-domain" type="text" placeholder="输入域名，如 example.com" spellcheck="false" />
+        <button id="btn-lookup-go" class="btn-send">查询</button>
+      </div>
+      <div id="lookup-loading" class="lookup-loading hidden">查询中...</div>
+      <pre id="lookup-result" class="lookup-result"></pre>
+      <div class="modal-actions">
+        <button id="btn-lookup-close">关闭</button>
       </div>
     </div>
   </div>
